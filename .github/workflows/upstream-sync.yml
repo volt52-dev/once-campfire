@@ -1,0 +1,85 @@
+# AbKinApp: keep this fork current with 37signals' Campfire.
+# Every Monday (and on demand) it checks basecamp/once-campfire for new commits on main.
+# If there are any, it pushes them to a branch and opens a pull request into our main,
+# so upstream fixes arrive through review instead of drifting.
+#
+# If "Allow GitHub Actions to create and approve pull requests" is off (organization or
+# repo setting), it opens an issue with a link to create the pull request instead.
+# Pull requests opened with the built-in token don't start other workflows by themselves;
+# to run CI on one, close and reopen it, or push a commit to its branch.
+name: Upstream sync
+
+on:
+  schedule:
+    - cron: "17 14 * * 1" # Mondays 14:17 UTC (8:17 am Chicago)
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    env:
+      UPSTREAM: basecamp/once-campfire
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream "https://github.com/${UPSTREAM}.git"
+          git fetch --no-tags upstream main
+
+      - name: Check for new upstream commits
+        id: check
+        run: |
+          behind=$(git rev-list --count HEAD..upstream/main)
+          echo "behind=$behind" >> "$GITHUB_OUTPUT"
+          echo "Upstream commits not yet in main: $behind"
+
+      - name: Open or update the sync pull request
+        if: steps.check.outputs.behind != '0'
+        env:
+          BEHIND: ${{ steps.check.outputs.behind }}
+        run: |
+          branch="upstream-sync/$(date -u +%Y-%m-%d)"
+          if gh pr list --state open --label upstream-sync --json number --jq '.[0].number' | grep -q . \
+            || gh issue list --state open --label upstream-sync --json number --jq '.[0].number' | grep -q .; then
+            echo "An upstream sync pull request or issue is already open; leaving it for review."
+            exit 0
+          fi
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "upstream/main:refs/heads/${branch}"
+          gh label create upstream-sync --color 0E8A16 --description "Changes from basecamp/once-campfire" 2>/dev/null || true
+          {
+            echo "Brings in ${BEHIND} new commit(s) from \`${UPSTREAM}\` main."
+            echo
+            echo "Before merging:"
+            echo "- [ ] CI is green (close and reopen this pull request if it didn't start)"
+            echo "- [ ] Conflicts with AbKin changes resolved (brand name, colors, icons)"
+            echo "- [ ] Security fixes noted in CHANGELOG"
+            echo
+            echo "Upstream log: https://github.com/${UPSTREAM}/commits/main"
+          } > body.md
+          title="Upstream sync: ${BEHIND} commit(s) from 37signals"
+          if ! gh pr create --base main --head "$branch" --title "$title" \
+               --body-file body.md --label upstream-sync; then
+            echo "Could not open a pull request (Actions may not be allowed to); opening an issue instead."
+            {
+              echo "Create the pull request: https://github.com/${GITHUB_REPOSITORY}/compare/main...${branch}?expand=1"
+              echo
+              cat body.md
+            } > issue.md
+            gh issue create --title "$title" --body-file issue.md --label upstream-sync
+          fi
