@@ -30,10 +30,11 @@ jobs:
       UPSTREAM: basecamp/once-campfire
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Fetch upstream
         run: |
@@ -49,16 +50,18 @@ jobs:
 
       - name: Open or update the sync pull request
         if: steps.check.outputs.behind != '0'
+        env:
+          BEHIND: ${{ steps.check.outputs.behind }}
         run: |
           branch="upstream-sync/$(date -u +%Y-%m-%d)"
           if gh pr list --state open --label upstream-sync --json number --jq '.[0].number' | grep -q .; then
             echo "An upstream sync pull request is already open; leaving it for review."
             exit 0
           fi
-          git push origin "upstream/main:refs/heads/${branch}"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "upstream/main:refs/heads/${branch}"
           gh label create upstream-sync --color 0E8A16 --description "Changes from basecamp/once-campfire" 2>/dev/null || true
           {
-            echo "Brings in ${{ steps.check.outputs.behind }} new commit(s) from \`${UPSTREAM}\` main."
+            echo "Brings in ${BEHIND} new commit(s) from \`${UPSTREAM}\` main."
             echo
             echo "Before merging:"
             echo "- [ ] CI is green (close and reopen this pull request if it didn't start)"
@@ -68,5 +71,5 @@ jobs:
             echo "Upstream log: https://github.com/${UPSTREAM}/commits/main"
           } > body.md
           gh pr create --base main --head "$branch" \
-            --title "Upstream sync: ${{ steps.check.outputs.behind }} commit(s) from 37signals" \
+            --title "Upstream sync: ${BEHIND} commit(s) from 37signals" \
             --body-file body.md --label upstream-sync
