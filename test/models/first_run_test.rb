@@ -22,6 +22,11 @@ class FirstRunTest < ActiveSupport::TestCase
     assert Room.first.open?
   end
 
+  test "account is named after the brand" do
+    create_first_run_user
+    assert_equal Brand::NAME, Account.first.name
+  end
+
   private
     def create_first_run_user
       FirstRun.create!({ name: "User", email_address: "user@example.com", password: "secret123456" })
