@@ -3,8 +3,8 @@
 # If there are any, it pushes them to a branch and opens a pull request into our main,
 # so upstream fixes arrive through review instead of drifting.
 #
-# Needs: Settings > Actions > General > Workflow permissions >
-#   "Allow GitHub Actions to create and approve pull requests" turned on.
+# If "Allow GitHub Actions to create and approve pull requests" is off (organization or
+# repo setting), it opens an issue with a link to create the pull request instead.
 # Pull requests opened with the built-in token don't start other workflows by themselves;
 # to run CI on one, close and reopen it, or push a commit to its branch.
 name: Upstream sync
@@ -26,6 +26,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      issues: write
     env:
       UPSTREAM: basecamp/once-campfire
       GH_TOKEN: ${{ github.token }}
@@ -54,8 +55,9 @@ jobs:
           BEHIND: ${{ steps.check.outputs.behind }}
         run: |
           branch="upstream-sync/$(date -u +%Y-%m-%d)"
-          if gh pr list --state open --label upstream-sync --json number --jq '.[0].number' | grep -q .; then
-            echo "An upstream sync pull request is already open; leaving it for review."
+          if gh pr list --state open --label upstream-sync --json number --jq '.[0].number' | grep -q . \
+            || gh issue list --state open --label upstream-sync --json number --jq '.[0].number' | grep -q .; then
+            echo "An upstream sync pull request or issue is already open; leaving it for review."
             exit 0
           fi
           git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "upstream/main:refs/heads/${branch}"
@@ -70,6 +72,14 @@ jobs:
             echo
             echo "Upstream log: https://github.com/${UPSTREAM}/commits/main"
           } > body.md
-          gh pr create --base main --head "$branch" \
-            --title "Upstream sync: ${BEHIND} commit(s) from 37signals" \
-            --body-file body.md --label upstream-sync
+          title="Upstream sync: ${BEHIND} commit(s) from 37signals"
+          if ! gh pr create --base main --head "$branch" --title "$title" \
+               --body-file body.md --label upstream-sync; then
+            echo "Could not open a pull request (Actions may not be allowed to); opening an issue instead."
+            {
+              echo "Create the pull request: https://github.com/${GITHUB_REPOSITORY}/compare/main...${branch}?expand=1"
+              echo
+              cat body.md
+            } > issue.md
+            gh issue create --title "$title" --body-file issue.md --label upstream-sync
+          fi
